@@ -119,7 +119,12 @@ Volatile.Write(ref stop, true);
 await Task.WhenAll(workers);
 
 var n = Interlocked.Read(ref ops);
+if (n == 0)
+{
+    throw new InvalidOperationException("No queries completed during the measurement. Check the connection string and run --setup first.");
+}
 var sqlClient = typeof(SqlConnection).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0];
-var sni = Environment.GetEnvironmentVariable("REPRO_MANAGED_SNI") == "1" ? "managed" : "native";
+var sni = !OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("REPRO_MANAGED_SNI") == "1" ? "managed" : "native";
 Console.WriteLine($"{RuntimeInformation.FrameworkDescription,-12} SqlClient {sqlClient} ({sni} SNI)  procs {Environment.ProcessorCount}  c={concurrency}  " +
                   $"{n / seconds,8:F0} queries/s  {cpuMs * 1000 / n,7:F1} us CPU/query  {(double)alloc / n,7:F0} B/query  errors {Interlocked.Read(ref errors)}");
+Environment.ExitCode = Interlocked.Read(ref errors) == 0 ? 0 : 1;

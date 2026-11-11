@@ -9,29 +9,50 @@ param(
     [int]$Seconds = 15,
     [long]$Affinity = 0xFF,     # logical CPUs 0-7; on a hybrid Intel CPU keep this on performance cores
     [switch]$ManagedSni,
-    [switch]$Mars
+    [switch]$Mars,
+    [switch]$NoRestore
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$out = Join-Path $root "bin\repro-$SqlClientVersion"
+$project = Join-Path $root 'SqlClientCpuRepro.csproj'
+$out = Join-Path $root "bin/repro-$SqlClientVersion"
+if (-not $IsWindows -and -not $IsLinux) {
+    throw 'This runner supports Windows and Linux.'
+}
+if ($IsLinux) {
+    $null = Get-Command taskset -ErrorAction Stop
+}
+if (-not $NoRestore) {
+    dotnet restore $project -p:SqlClientVersion=$SqlClientVersion -nologo -v minimal
+    if ($LASTEXITCODE -ne 0) { throw 'restore failed' }
+}
 foreach ($tfm in 'net10.0', 'net11.0') {
-    dotnet build $root -c Release -f $tfm -p:SqlClientVersion=$SqlClientVersion -o (Join-Path $out $tfm) -nologo -v q | Out-Null
+    dotnet build $project --no-restore -c Release -f $tfm -p:SqlClientVersion=$SqlClientVersion -o (Join-Path $out $tfm) -nologo -v q
     if ($LASTEXITCODE -ne 0) { throw "build failed for $tfm" }
 }
 $env:REPRO_MANAGED_SNI = if ($ManagedSni) { '1' } else { '0' }
 $env:REPRO_MARS = if ($Mars) { '1' } else { '0' }
 
-$self = [System.Diagnostics.Process]::GetCurrentProcess()
-$all = $self.ProcessorAffinity
+if ($IsWindows) {
+    $self = [System.Diagnostics.Process]::GetCurrentProcess()
+    $all = $self.ProcessorAffinity
+}
 for ($r = 1; $r -le $Rounds; $r++) {
     foreach ($c in $Concurrency) {
         foreach ($tfm in 'net10.0', 'net11.0') {
-            # the child inherits the affinity, so its runtime sizes the GC and thread pool for these CPUs from the start
-            $self.ProcessorAffinity = [IntPtr]$Affinity
-            try {
-                & (Join-Path $out "$tfm\SqlClientCpuRepro.exe") $c $Seconds
-            } finally {
-                $self.ProcessorAffinity = $all
+            $dll = Join-Path $out "$tfm/SqlClientCpuRepro.dll"
+            # Set affinity before runtime startup so GC and thread pool sizing use the selected CPUs.
+            if ($IsLinux) {
+                taskset ([Convert]::ToString($Affinity, 16)) dotnet $dll $c $Seconds
+                if ($LASTEXITCODE -ne 0) { throw "run failed for $tfm" }
+            } else {
+                $self.ProcessorAffinity = [IntPtr]$Affinity
+                try {
+                    dotnet $dll $c $Seconds
+                    if ($LASTEXITCODE -ne 0) { throw "run failed for $tfm" }
+                } finally {
+                    $self.ProcessorAffinity = $all
+                }
             }
         }
     }

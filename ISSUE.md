@@ -76,7 +76,8 @@ None found:
 - SQL Server 2022 CU27 in Docker 28.3.3 (Docker Desktop, WSL 2) on the same machine, TCP on loopback
 - Microsoft.Data.SqlClient 7.1.1 and 8.0.0-preview1.26313.4
 
-I haven't checked Linux.
+The results above were collected on Windows. The repo's runner also supports Linux via `taskset`; Linux always uses
+managed networking, so the native SNI results above do not apply there. See the README for Linux run instructions.
 
 ### Other information
 
